@@ -1,4 +1,7 @@
 #include <arpa/inet.h>
+#include <linux/if_packet.h>
+#include <net/ethernet.h>
+#include <net/if.h>
 #include <sys/socket.h>
 
 #include <stdint.h>
@@ -7,11 +10,14 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "./src/tcp/module_ptr.h"
+
 const char *addr = "192.168.1.16";
+const char *mac = "\xbc\x38\x98\xa0\x6c\xfc";
 const uint16_t port = 443;
 
 int getsock() {
-  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  int sock = socket(AF_PACKET, SOCK_RAW, 0);
   if (sock < 0) {
     printf("[master/ERROR] : socket error\n");
     return -1;
@@ -22,29 +28,6 @@ int getsock() {
   return sock;
 };
 
-int get_connection(int sock, const char *addr, uint16_t port) {
-  // NOTE: Pass the address as a string like "192.168.1.1";
-  //       Pass the port in little-endian format
-
-  struct sockaddr_in sa;
-  memset(&sa, 0, sizeof(struct sockaddr_in));
-  sa.sin_family = AF_INET;
-
-  if (inet_pton(AF_INET, addr, &sa.sin_addr) < 0) {
-    printf("[master/ERROR] : invalid address\n");
-    return -1;
-  }
-
-  sa.sin_port = htons(port);
-
-  if (connect(sock, (struct sockaddr *)&sa, sizeof(struct sockaddr)) < 0) {
-    printf("[master/ERROR] : connection error\n");
-    return -1;
-  };
-
-  return 0;
-};
-
 int main() {
   printf("[master/INFO] : Started.\n");
 
@@ -53,11 +36,20 @@ int main() {
     return -1;
   };
 
-  if (get_connection(sock, addr, port) < 0) {
-    return -1;
-  };
+  struct sockaddr_ll sa;
+  memset(&sa, 0, sizeof(struct sockaddr_ll));
+
+  sa.sll_family = AF_PACKET;
+  sa.sll_ifindex = if_nametoindex("eth0");
+  sa.sll_protocol = htons(ETH_P_IP);
+  sa.sll_halen = 6;
+
+  memcpy(sa.sll_addr, mac, 6);
 
   printf("[master/INFO] : done\n");
 
+  // TODO: eip bruteforce
+
+  set_tcp_connection(sock, &sa, 0xdeadbeef);
   return 0;
 };
