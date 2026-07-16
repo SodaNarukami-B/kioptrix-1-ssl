@@ -34,7 +34,7 @@ struct ps_header {
 const uint8_t my_mac[] = "\x08\x00\x27\xc9\xb7\xe3";
 const uint8_t tar_mac[] = "\xbc\x38\x98\xa0\x6c\xfc";
 
-const char *my_ip = "192.168.1.5";
+const char *my_ip = "192.168.1.8";
 const char *tar_ip = "192.168.1.16";
 
 uint16_t get_checksum(uint16_t *addr, size_t count) {
@@ -56,7 +56,48 @@ uint16_t get_checksum(uint16_t *addr, size_t count) {
   return (uint16_t)(~big_sum);
 };
 
-int tcp_handshake(int sock, struct sockaddr_ll *sa, uint32_t eip) {
+int recv_data(int sock, uint8_t *recv_buffer, size_t buf_size,
+              struct sockaddr_ll *sa, uint32_t seq) {
+  while (1) {
+    if (recvfrom(sock, recv_buffer, buf_size, 0, NULL, NULL) < 0) {
+      printf("[recv_data/ERROR]: failed to receive\n");
+      return -1;
+    };
+
+    struct packet_t *recv = (struct packet_t *)recv_buffer;
+
+    if (ntohs(recv->tcp.th_dport) != 60001) {
+      printf("1\r");
+      continue;
+    };
+
+    if (memcmp(recv->eth.h_dest, my_mac, 6) != 0) {
+      printf("2\r");
+      continue;
+    };
+
+    if (memcmp(recv->eth.h_source, tar_mac, 6) != 0) {
+      printf("3\r");
+      continue;
+    };
+
+    if (recv->ip.protocol != IPPROTO_TCP) {
+      printf("4\r");
+      continue;
+    };
+
+    if (recv->tcp.th_ack != seq + 1) {
+      printf("5\r");
+      continue;
+    };
+
+    printf("\n");
+    break;
+  }
+  return 0;
+}
+
+int tcp_handshake(int sock, struct sockaddr_ll *sa) {
   struct packet_t packet;
   struct ps_header pshdr;
   memset(&packet, 0, sizeof(struct packet_t));
@@ -72,8 +113,8 @@ int tcp_handshake(int sock, struct sockaddr_ll *sa, uint32_t eip) {
   // Ip Header
   packet.ip.version = 4;
   packet.ip.ihl = 5;
-  packet.ip.tot_len =
-      sizeof(struct iphdr) + sizeof(struct tcphdr); // XXX: NOT IN ALL CASES
+  packet.ip.tot_len = htons(sizeof(struct iphdr) +
+                            sizeof(struct tcphdr)); // XXX: NOT IN ALL CASES
   packet.ip.frag_off = 0;
   packet.ip.ttl = 255;
   packet.ip.protocol = IPPROTO_TCP;
@@ -91,8 +132,8 @@ int tcp_handshake(int sock, struct sockaddr_ll *sa, uint32_t eip) {
 
   // Tcp header
 
-  packet.tcp.th_sport = htons(443);
-  packet.tcp.th_dport = htons(60001);
+  packet.tcp.th_sport = htons(60001);
+  packet.tcp.th_dport = htons(443);
   packet.tcp.seq = htonl(40001);
   packet.tcp.doff = (&packet.zero - (uint8_t *)&packet.tcp) / 4;
   packet.tcp.syn = 1;
@@ -104,7 +145,9 @@ int tcp_handshake(int sock, struct sockaddr_ll *sa, uint32_t eip) {
   // Tcp checksum
   uint8_t *checksum_buffer =
       (uint8_t *)calloc(1, sizeof(struct ps_header) + sizeof(struct tcphdr));
+
   memcpy(checksum_buffer, (uint8_t *)&pshdr, sizeof(struct ps_header));
+
   memcpy(checksum_buffer + sizeof(struct ps_header), (uint8_t *)&packet.tcp,
          sizeof(struct tcphdr));
 
@@ -113,12 +156,26 @@ int tcp_handshake(int sock, struct sockaddr_ll *sa, uint32_t eip) {
                                       sizeof(struct ps_header));
 
   int send_val = sendto(sock, &packet, sizeof(struct packet_t) - 1, 0,
-                        (struct sockaddr *)&sa, sizeof(struct sockaddr));
+                        (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
 
-  if (send_val <= 0) {
-    printf("[TH/ERROR] : Syncronize failed\n");
+  if (send_val < 0) {
+    printf("[tcp_h/ERROR] : Syncronize -> sending failed\n");
+    return -1;
   };
 
   free(checksum_buffer);
+
+  uint8_t *recv_buffer = (uint8_t *)calloc(1, 64);
+
+  recv_data(sock, recv_buffer, 64, sa, packet.tcp.seq);
+
+  for (int i = 0; i < 64; i++) {
+    printf("%02x%s", *(recv_buffer + i),
+           ((i + 1) % 16 == 0 || (i + 1) == 64) ? "\n" : " ");
+  };
+
   return 0;
 };
+
+// XXX: Надо пофиксить там хуйня одна, syn-ack то приходить, но recv_data его не
+// видит.
