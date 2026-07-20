@@ -14,168 +14,142 @@
 
 #pragma pack(push, 1)
 
-struct packet_t {
+struct tcph_packet_t {
   struct ethhdr eth;
   struct iphdr ip;
   struct tcphdr tcp;
-  uint8_t zero;
 };
 
-struct ps_header {
-  uint32_t source_address;
-  uint32_t dest_address;
-  uint8_t place_holder;
+struct pseudo_h_t {
+  uint32_t saddr;
+  uint32_t daddr;
+  uint8_t pad;
   uint8_t proto;
   uint16_t tcp_length;
 };
 
-#pragma pack(pop)
+#pragma pack(pop, 1)
 
-const uint8_t my_mac[] = "\x08\x00\x27\xc9\xb7\xe3";
-const uint8_t tar_mac[] = "\xbc\x38\x98\xa0\x6c\xfc";
+int send_pack(int sock, uint8_t *buf, size_t buf_s, struct sockaddr_ll *sa);
+int recv_pack(int sock, uint8_t *buf, size_t buf_s);
+uint16_t get_check(uint16_t *ptr, size_t count);
+int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
+          struct iphdr *ip);
 
-const char *my_ip = "192.168.1.8";
-const char *tar_ip = "192.168.1.16";
+// Tcp handshake steps
 
-uint16_t get_checksum(uint16_t *addr, size_t count) {
-  uint32_t big_sum = 0;
+int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
+          struct iphdr *ip) {
+  struct tcph_packet_t pack;
+  memset(&pack, 0, sizeof(struct tcph_packet_t));
 
-  while (count > 1) {
-    big_sum += *addr++;
-    count -= 2;
-  }
+  memcpy(&pack.eth, eth, sizeof(struct ethhdr));
+  memcpy(&pack.ip, ip, sizeof(struct iphdr));
 
-  if (count > 0) {
-    big_sum += *(uint8_t *)addr;
+  pack.ip.check = 0;
+
+  pack.tcp.source = htons(4444);
+  pack.tcp.dest = htons(443);
+  pack.tcp.seq = htonl(0x10101010); // Like pattern or smth
+  pack.tcp.doff = 5;
+  pack.tcp.syn = 1;
+  pack.tcp.window = 0xffff;
+  pack.tcp.check = 0;
+
+  // checksums
+  uint8_t *buffer = (uint8_t *)calloc(1, sizeof(struct iphdr));
+
+  memcpy(buffer, ip, sizeof(struct iphdr));
+  pack.ip.check = get_check((uint16_t *)buffer, sizeof(struct iphdr));
+
+  free(buffer);
+
+  size_t tcp_total_len = sizeof(struct pseudo_h_t) + sizeof(struct tcphdr);
+
+  buffer = (uint8_t *)calloc(1, tcp_total_len);
+
+  struct pseudo_h_t *pseudo_h = (struct pseudo_h_t *)buffer;
+
+  memcpy(&pseudo_h->saddr, &ip->saddr, 4);
+  memcpy(&pseudo_h->daddr, &ip->daddr, 4);
+  pseudo_h->proto = IPPROTO_TCP;
+  pseudo_h->tcp_length = htons(sizeof(struct tcphdr));
+
+  memcpy(buffer + sizeof(struct pseudo_h_t), &pack.tcp, sizeof(struct tcphdr));
+
+  pack.tcp.check = get_check((uint16_t *)buffer, tcp_total_len);
+
+  free(buffer);
+
+  // sending & recving
+
+  if (send_pack(sock, (uint8_t *)&pack, sizeof(struct tcph_packet_t), sa) < 0)
+    return -1;
+
+  uint8_t *recv_buffer = (uint8_t *)calloc(1, 128);
+  struct tcph_packet_t *r_pack = (struct tcph_packet_t *)recv_buffer;
+
+  while (1) {
+    if (recv_pack(sock, recv_buffer, 128) < 0)
+      return -1;
+
+    if (r_pack->ip.protocol != IPPROTO_TCP)
+      continue;
+
+    if (memcmp(r_pack->eth.h_dest, eth->h_source, 6) != 0)
+      continue;
+
+    if (memcmp(&r_pack->ip.daddr, &ip->saddr, 4) != 0)
+      continue;
+
+    if (r_pack->tcp.dest != pack.tcp.source)
+      continue;
+
+    printf("[syn/INFO]: packet received...\n");
+
+    for (int i = 0; i < 128; i++) {
+      printf("%02x%s", recv_buffer[i], ((i + 1) % 16 == 0) ? "\n" : " ");
+    };
   };
-
-  while (big_sum >> 16) {
-    big_sum = (big_sum & 0xffff) + (big_sum >> 16);
-  };
-
-  return (uint16_t)(~big_sum);
 };
 
-int recv_data(int sock, uint8_t *recv_buffer, size_t buf_size,
-              struct sockaddr_ll *sa, uint32_t seq) {
-  while (1) {
-    if (recvfrom(sock, recv_buffer, buf_size, 0, NULL, NULL) < 0) {
-      printf("[recv_data/ERROR]: failed to receive\n");
-      return -1;
-    };
-
-    struct packet_t *recv = (struct packet_t *)recv_buffer;
-
-    if (ntohs(recv->tcp.th_dport) != 60001) {
-      printf("1\r");
-      continue;
-    };
-
-    if (memcmp(recv->eth.h_dest, my_mac, 6) != 0) {
-      printf("2\r");
-      continue;
-    };
-
-    if (memcmp(recv->eth.h_source, tar_mac, 6) != 0) {
-      printf("3\r");
-      continue;
-    };
-
-    if (recv->ip.protocol != IPPROTO_TCP) {
-      printf("4\r");
-      continue;
-    };
-
-    if (recv->tcp.th_ack != seq + 1) {
-      printf("5\r");
-      continue;
-    };
-
-    printf("\n");
-    break;
-  }
-  return 0;
-}
-
-int tcp_handshake(int sock, struct sockaddr_ll *sa) {
-  struct packet_t packet;
-  struct ps_header pshdr;
-  memset(&packet, 0, sizeof(struct packet_t));
-  memset(&pshdr, 0, sizeof(struct ps_header));
-
-  // NOTE: Syncronize
-
-  // Eth header
-  memcpy(packet.eth.h_dest, tar_mac, 6);
-  memcpy(packet.eth.h_source, my_mac, 6);
-  packet.eth.h_proto = htons(ETH_P_IP);
-
-  // Ip Header
-  packet.ip.version = 4;
-  packet.ip.ihl = 5;
-  packet.ip.tot_len = htons(sizeof(struct iphdr) +
-                            sizeof(struct tcphdr)); // XXX: NOT IN ALL CASES
-  packet.ip.frag_off = 0;
-  packet.ip.ttl = 255;
-  packet.ip.protocol = IPPROTO_TCP;
-
-  inet_pton(AF_INET, my_ip, &packet.ip.saddr);
-  inet_pton(AF_INET, tar_ip, &packet.ip.daddr);
-
-  packet.ip.check = get_checksum((uint16_t *)&packet.ip, sizeof(struct iphdr));
-
-  // Pseudo header
-  inet_pton(AF_INET, my_ip, (uint8_t *)&pshdr.source_address);
-  inet_pton(AF_INET, tar_ip, (uint8_t *)&pshdr.dest_address);
-  pshdr.proto = IPPROTO_TCP;
-  pshdr.tcp_length = htons(&packet.zero - (uint8_t *)&packet.tcp);
-
-  // Tcp header
-
-  packet.tcp.th_sport = htons(60001);
-  packet.tcp.th_dport = htons(443);
-  packet.tcp.seq = htonl(40001);
-  packet.tcp.doff = (&packet.zero - (uint8_t *)&packet.tcp) / 4;
-  packet.tcp.syn = 1;
-  packet.tcp.window = htons(65535);
-  packet.tcp.check = 0;
-  packet.tcp.urg = 0;
-  packet.tcp.urg_ptr = 0;
-
-  // Tcp checksum
-  uint8_t *checksum_buffer =
-      (uint8_t *)calloc(1, sizeof(struct ps_header) + sizeof(struct tcphdr));
-
-  memcpy(checksum_buffer, (uint8_t *)&pshdr, sizeof(struct ps_header));
-
-  memcpy(checksum_buffer + sizeof(struct ps_header), (uint8_t *)&packet.tcp,
-         sizeof(struct tcphdr));
-
-  packet.tcp.check = get_checksum((uint16_t *)checksum_buffer,
-                                  &packet.zero - (uint8_t *)&packet.tcp +
-                                      sizeof(struct ps_header));
-
-  int send_val = sendto(sock, &packet, sizeof(struct packet_t) - 1, 0,
-                        (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
-
-  if (send_val < 0) {
-    printf("[tcp_h/ERROR] : Syncronize -> sending failed\n");
+int send_pack(int sock, uint8_t *buf, size_t buf_s, struct sockaddr_ll *sa) {
+  int sended = sendto(sock, buf, buf_s, 0, (struct sockaddr *)sa,
+                      sizeof(struct sockaddr_ll));
+  if (sended <= 0) {
+    fprintf(stderr, "[sock/ERROR]: sending failed\n");
     return -1;
   };
 
-  free(checksum_buffer);
+  return 0;
+};
 
-  uint8_t *recv_buffer = (uint8_t *)calloc(1, 64);
+int recv_pack(int sock, uint8_t *buf, size_t buf_s) {
+  int recved = recvfrom(sock, buf, buf_s, 0, NULL, NULL);
 
-  recv_data(sock, recv_buffer, 64, sa, packet.tcp.seq);
-
-  for (int i = 0; i < 64; i++) {
-    printf("%02x%s", *(recv_buffer + i),
-           ((i + 1) % 16 == 0 || (i + 1) == 64) ? "\n" : " ");
+  if (recved <= 0) {
+    fprintf(stderr, "[sock/ERROR]: receiving failed\n");
+    return -1;
   };
 
   return 0;
 };
 
-// XXX: Надо пофиксить там хуйня одна, syn-ack то приходить, но recv_data его не
-// видит.
+uint16_t get_check(uint16_t *ptr, size_t count) {
+  uint32_t result = 0;
+
+  while (count > 1) {
+    result += *ptr++;
+    count -= 2;
+  };
+
+  if (count > 0) {
+    result += *(uint8_t *)ptr;
+  };
+
+  while (result >> 16) {
+    result = (result & 0xffff) + (result >> 16);
+  };
+
+  return (uint16_t)(~result);
+};

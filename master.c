@@ -2,6 +2,7 @@
 #include <linux/if_packet.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <netinet/ip.h>
 #include <sys/socket.h>
 
 #include <stdint.h>
@@ -42,7 +43,14 @@ int main() {
 
   memcpy(sa.sll_addr, mac, 6);
 
-  tcp_handshake(sock, &sa);
+  struct ethhdr eth;
+  struct iphdr ip;
+
+  // FIXME: Fill ip and eth hedaers
+
+  if (_syn(sock, &sa, &eth, &ip) < 0) {
+    return -1;
+  };
   printf("[master/INFO] : done\n");
 
   return 0;
