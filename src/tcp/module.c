@@ -12,6 +12,8 @@
 
 #include "./module_ptr.h"
 
+// WARN: Too much spagetti-code. Rework needed
+
 #pragma pack(push, 1)
 
 struct tcph_packet_t {
@@ -28,11 +30,10 @@ struct pseudo_h_t {
   uint16_t tcp_length;
 };
 
-#pragma pack(pop, 1)
+#pragma pack(pop)
 
 int send_pack(int sock, uint8_t *buf, size_t buf_s, struct sockaddr_ll *sa);
 int recv_pack(int sock, uint8_t *buf, size_t buf_s);
-uint16_t get_check(uint16_t *ptr, size_t count);
 int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
           struct iphdr *ip);
 
@@ -46,6 +47,7 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
   memcpy(&pack.eth, eth, sizeof(struct ethhdr));
   memcpy(&pack.ip, ip, sizeof(struct iphdr));
 
+  pack.ip.tot_len = htons(sizeof(struct tcph_packet_t) - sizeof(struct ethhdr));
   pack.ip.check = 0;
 
   pack.tcp.source = htons(4444);
@@ -57,27 +59,22 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
   pack.tcp.check = 0;
 
   // checksums
-  uint8_t *buffer = (uint8_t *)calloc(1, sizeof(struct iphdr));
-
-  memcpy(buffer, ip, sizeof(struct iphdr));
-  pack.ip.check = get_check((uint16_t *)buffer, sizeof(struct iphdr));
-
-  free(buffer);
-
+  pack.ip.check = get_check((const uint8_t *)&pack.ip, sizeof(struct iphdr));
   size_t tcp_total_len = sizeof(struct pseudo_h_t) + sizeof(struct tcphdr);
 
-  buffer = (uint8_t *)calloc(1, tcp_total_len);
+  uint8_t *buffer = (uint8_t *)calloc(1, tcp_total_len);
 
   struct pseudo_h_t *pseudo_h = (struct pseudo_h_t *)buffer;
 
   memcpy(&pseudo_h->saddr, &ip->saddr, 4);
   memcpy(&pseudo_h->daddr, &ip->daddr, 4);
+  pseudo_h->pad = 0;
   pseudo_h->proto = IPPROTO_TCP;
   pseudo_h->tcp_length = htons(sizeof(struct tcphdr));
 
   memcpy(buffer + sizeof(struct pseudo_h_t), &pack.tcp, sizeof(struct tcphdr));
 
-  pack.tcp.check = get_check((uint16_t *)buffer, tcp_total_len);
+  pack.tcp.check = get_check(buffer, tcp_total_len);
 
   free(buffer);
 
@@ -90,7 +87,8 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
   struct tcph_packet_t *r_pack = (struct tcph_packet_t *)recv_buffer;
 
   while (1) {
-    if (recv_pack(sock, recv_buffer, 128) < 0)
+    int recved = recv_pack(sock, recv_buffer, 128);
+    if (recved <= 0)
       return -1;
 
     if (r_pack->ip.protocol != IPPROTO_TCP)
@@ -107,11 +105,19 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
 
     printf("[syn/INFO]: packet received...\n");
 
-    for (int i = 0; i < 128; i++) {
-      printf("%02x%s", recv_buffer[i], ((i + 1) % 16 == 0) ? "\n" : " ");
+    for (int i = 0; i < recved; i++) {
+      printf("%02x%s", recv_buffer[i],
+             ((i + 1) % 16 == 0 || (i + 1) == recved) ? "\n" : " ");
     };
+
+    // FIXME: remove debug info, make syn-ack flag validation
   };
 };
+
+int _sync_ack(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
+              struct iphdr *ip);
+
+// FIXME: make _sync_ack
 
 int send_pack(int sock, uint8_t *buf, size_t buf_s, struct sockaddr_ll *sa) {
   int sended = sendto(sock, buf, buf_s, 0, (struct sockaddr *)sa,
@@ -132,24 +138,27 @@ int recv_pack(int sock, uint8_t *buf, size_t buf_s) {
     return -1;
   };
 
-  return 0;
+  return recved;
 };
 
-uint16_t get_check(uint16_t *ptr, size_t count) {
-  uint32_t result = 0;
+uint16_t get_check(const uint8_t *addr, size_t count) {
+  uint32_t sum = 0;
+  const uint16_t *ptr = (const uint16_t *)addr;
 
   while (count > 1) {
-    result += *ptr++;
+    sum += *ptr++;
     count -= 2;
-  };
+  }
 
   if (count > 0) {
-    result += *(uint8_t *)ptr;
-  };
+    sum += *(const uint8_t *)ptr;
+  }
 
-  while (result >> 16) {
-    result = (result & 0xffff) + (result >> 16);
-  };
+  while (sum >> 16) {
+    sum = (sum & 0xFFFF) + (sum >> 16);
+  }
 
-  return (uint16_t)(~result);
-};
+  return (uint16_t)(~sum);
+}
+
+// WARN: Idk how it's works

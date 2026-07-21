@@ -9,7 +9,8 @@
 int tcp_handshake(int sock, struct sockaddr_ll *sa);
 
 /* debug  */
-int _syn(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
-         struct iphdr *ip);
+int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
+          struct iphdr *ip);
+uint16_t get_check(const uint8_t *addr, size_t count);
 
 #endif
