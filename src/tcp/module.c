@@ -88,6 +88,8 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
 
   while (1) {
     int recved = recv_pack(sock, recv_buffer, 128);
+
+    // Dest and protocol validation
     if (recved <= 0)
       return -1;
 
@@ -103,14 +105,20 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
     if (r_pack->tcp.dest != pack.tcp.source)
       continue;
 
-    printf("[syn/INFO]: packet received...\n");
+    // Tcp validation
+    if (!r_pack->tcp.ack || r_pack->tcp.fin) {
+      printf("Connection closed on tcp layer (syn)\n");
+      return -1;
+    };
 
+    printf("Syn-ack received\n");
+
+    /*
     for (int i = 0; i < recved; i++) {
       printf("%02x%s", recv_buffer[i],
              ((i + 1) % 16 == 0 || (i + 1) == recved) ? "\n" : " ");
     };
-
-    // FIXME: remove debug info, make syn-ack flag validation
+    */
   };
 };
 
