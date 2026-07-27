@@ -112,6 +112,7 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
     };
 
     printf("Syn-ack received\n");
+    break;
 
     /*
     for (int i = 0; i < recved; i++) {
@@ -120,12 +121,38 @@ int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
     };
     */
   };
+
+  // UNCHECKED / NEEDED TO REVIEW:
+  uint32_t serv_seq = ntohl(r_pack->tcp.seq);
+
+  pack.tcp.seq = htonl(0x10101011);
+  pack.tcp.ack_seq = htonl(serv_seq + 1);
+
+  pack.tcp.ack = 1;
+  pack.tcp.syn = 0; // removing flag
+
+  pack.tcp.check = 0;
+  buffer = (uint8_t *)calloc(1, 128);
+
+  memcpy(buffer, pseudo_h, sizeof(struct pseudo_h_t));
+  memcpy(buffer + sizeof(struct pseudo_h_t), &pack.tcp, sizeof(struct tcphdr));
+
+  pack.tcp.check = get_check(buffer, tcp_total_len);
+
+  free(buffer);
+
+  if (sendto(sock, &pack, sizeof(struct tcph_packet_t), 0,
+             (struct sockaddr *)sa, sizeof(struct sockaddr_ll)) < 0) {
+    printf("ack sending failed\n");
+  };
+
+  return 0;
 };
 
+/*
 int _sync_ack(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
               struct iphdr *ip);
-
-// FIXME: make _sync_ack
+*/
 
 int send_pack(int sock, uint8_t *buf, size_t buf_s, struct sockaddr_ll *sa) {
   int sended = sendto(sock, buf, buf_s, 0, (struct sockaddr *)sa,
