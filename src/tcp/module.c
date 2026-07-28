@@ -176,6 +176,7 @@ int recv_pack(int sock, uint8_t *buf, size_t buf_s) {
   return recved;
 };
 
+// WARN: Idk how it's works
 uint16_t get_check(const uint8_t *addr, size_t count) {
   uint32_t sum = 0;
   const uint16_t *ptr = (const uint16_t *)addr;
@@ -195,5 +196,3 @@ uint16_t get_check(const uint8_t *addr, size_t count) {
 
   return (uint16_t)(~sum);
 }
-
-// WARN: Idk how it's works
