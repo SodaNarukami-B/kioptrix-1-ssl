@@ -6,11 +6,15 @@
 #include <netinet/ip.h>
 #include <stdint.h>
 
-int tcp_handshake(int sock, struct sockaddr_ll *sa);
+#pragma pack(push, 1)
 
-/* debug  */
-int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
-          struct iphdr *ip);
-uint16_t get_check(const uint8_t *addr, size_t count);
+// tcp_conn_t - structure for more comfortable passing handshake data between
+// different functions
+struct tcp_conn_t {
+  uint16_t s_port;
+  uint16_t d_port;
+  uint32_t client_seq;
+  uint32_t serv_seq;
+};
 
 #endif
