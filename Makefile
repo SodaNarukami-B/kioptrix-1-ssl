@@ -1,3 +1,3 @@
 all:
-	gcc ./master.c ./src/*/module.c -o ./bin/main
+	gcc ./master.c ./src/*/*.c -o ./bin/main
 	./bin/main

@@ -1,7 +1,4 @@
 #include <arpa/inet.h>
-#include <linux/if_ether.h>
-#include <linux/if_packet.h>
-#include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 
@@ -12,187 +9,179 @@
 
 #include "./module_ptr.h"
 
-// WARN: Too much spagetti-code. Rework needed
+// NOTE: Rework plan
+//
+// What we need?
+// - Splited archetecture    *
+// - More steps of receiving -
+//
+// Also i think about archetecture like this:
+// int handshake() {
+//   _syn();
+//   _ack();
+// };
+
+// Realization
 
 #pragma pack(push, 1)
 
-struct tcph_packet_t {
+// Main header structure (eth + ip + tcp)
+struct tcp_pack_t {
   struct ethhdr eth;
   struct iphdr ip;
   struct tcphdr tcp;
 };
 
-struct pseudo_h_t {
+struct pshdr {
   uint32_t saddr;
   uint32_t daddr;
-  uint8_t pad;
+  uint8_t zero;
   uint8_t proto;
-  uint16_t tcp_length;
+  uint16_t tcp_len;
 };
 
 #pragma pack(pop)
 
-int send_pack(int sock, uint8_t *buf, size_t buf_s, struct sockaddr_ll *sa);
-int recv_pack(int sock, uint8_t *buf, size_t buf_s);
-int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
-          struct iphdr *ip);
+// NOTE: Initialization / callable talbe
+int _syn(int sock, struct ethhdr *eth, struct iphdr *ip, struct tcp_conn_t *tcp,
+         struct sockaddr_ll *sa);
+int _ack(int sock, struct ethhdr *eth, struct iphdr *ip, struct tcp_conn_t *tcp,
+         struct sockaddr_ll *sa);
+int set_handshake(int sock, struct ethhdr *eth, struct iphdr *ip,
+                  struct tcp_conn_t *tcp, struct sockaddr_ll *sa);
+uint16_t get_checksum(void *ptr, size_t len);
 
-// Tcp handshake steps
+// NOTE: Realization
+int set_handshake(int sock, struct ethhdr *eth, struct iphdr *ip,
+                  struct tcp_conn_t *tcp_conn, struct sockaddr_ll *sa) {
 
-int _sync(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
-          struct iphdr *ip) {
-  struct tcph_packet_t pack;
-  memset(&pack, 0, sizeof(struct tcph_packet_t));
+  if (_syn(sock, eth, ip, tcp_conn, sa) < 0)
+    return -1;
 
-  memcpy(&pack.eth, eth, sizeof(struct ethhdr));
-  memcpy(&pack.ip, ip, sizeof(struct iphdr));
+  // _ack(sock, eth, ip, tcp_conn, sa);
 
-  pack.ip.tot_len = htons(sizeof(struct tcph_packet_t) - sizeof(struct ethhdr));
+  return 0;
+};
+
+// NOTE: Realization / child functions
+
+uint16_t get_checksum(void *ptr, size_t len) {
+  const uint16_t *p = (uint16_t *)ptr;
+
+  uint32_t result = 0;
+
+  while (len > 1) {
+    result += *p++;
+    len -= 2;
+  };
+
+  if (len > 0) {
+    result += *(const uint8_t *)p;
+  };
+
+  while (result >> 16) {
+    result = (result & 0xffff) + (result >> 16);
+  };
+
+  return (uint16_t)(~result); // In host order
+};
+
+int _syn(int sock, struct ethhdr *eth, struct iphdr *ip,
+         struct tcp_conn_t *tcp_conn, struct sockaddr_ll *sa) {
+  struct tcp_pack_t pack;
+  memset(&pack, 0, sizeof(struct tcp_pack_t));
+
+  // ethhdr
+  memcpy(pack.eth.h_dest, eth->h_dest, 6);
+  memcpy(pack.eth.h_source, eth->h_source, 6);
+  pack.eth.h_proto = htons(ETH_P_IP);
+
+  // iphdr
+  uint16_t tcp_ip_len =
+      htons(sizeof(struct tcp_pack_t) - sizeof(struct ethhdr));
+
+  pack.ip.version = 4;
+  pack.ip.ihl = sizeof(struct iphdr) / 4;
+  pack.ip.tot_len = tcp_ip_len;
+  pack.ip.ttl = 64;
+  pack.ip.protocol = IPPROTO_TCP;
+  // For correctly checksum calculating, we setting zero checksum before
+  // calculating
   pack.ip.check = 0;
+  // Copying addresses
+  memcpy((uint8_t *)&pack.ip.saddr, (uint8_t *)&ip->saddr, 4);
+  memcpy((uint8_t *)&pack.ip.daddr, (uint8_t *)&ip->daddr, 4);
 
-  pack.tcp.source = htons(4444);
-  pack.tcp.dest = htons(443);
-  pack.tcp.seq = htonl(0x10101010); // Like pattern or smth
-  pack.tcp.doff = 5;
+  // Now we can calc checksum
+  pack.ip.check = htons(get_checksum(&pack.ip, sizeof(struct iphdr)));
+
+  // tcphdr
+  pack.tcp.source = htons(tcp_conn->s_port);
+  pack.tcp.dest = htons(tcp_conn->d_port);
+  pack.tcp.seq = htonl(tcp_conn->client_seq);
+  /*
+    uint8_t data_offset =
+        ((uint8_t *)(&pack.tcp.urg_ptr + 1) - (uint8_t *)(&pack.tcp)) / 4;
+                    ^^^^^^^^^^^^^^^^^^^^^^^
+    TIP: You can use that method when there is external options or non-zero
+    payload
+  */
+  pack.tcp.doff = sizeof(struct tcphdr) / 4;
   pack.tcp.syn = 1;
   pack.tcp.window = 0xffff;
-  pack.tcp.check = 0;
+  pack.tcp.check = 0; // Same like in iphdr
 
-  // checksums
-  pack.ip.check = get_check((const uint8_t *)&pack.ip, sizeof(struct iphdr));
-  size_t tcp_total_len = sizeof(struct pseudo_h_t) + sizeof(struct tcphdr);
+  // Checksum in tcp need another method for correct calc
+  uint8_t checksum_buffer[32];
+  memset(checksum_buffer, 0, 32);
 
-  uint8_t *buffer = (uint8_t *)calloc(1, tcp_total_len);
+  struct pshdr *pseudo = (struct pshdr *)&checksum_buffer;
 
-  struct pseudo_h_t *pseudo_h = (struct pseudo_h_t *)buffer;
+  memcpy(checksum_buffer + sizeof(struct pshdr), &pack.tcp,
+         sizeof(struct tcphdr));
 
-  memcpy(&pseudo_h->saddr, &ip->saddr, 4);
-  memcpy(&pseudo_h->daddr, &ip->daddr, 4);
-  pseudo_h->pad = 0;
-  pseudo_h->proto = IPPROTO_TCP;
-  pseudo_h->tcp_length = htons(sizeof(struct tcphdr));
+  pseudo->saddr = ip->saddr;
+  pseudo->daddr = ip->daddr;
+  pseudo->proto = IPPROTO_TCP;
+  pseudo->tcp_len = htons(sizeof(struct tcphdr));
 
-  memcpy(buffer + sizeof(struct pseudo_h_t), &pack.tcp, sizeof(struct tcphdr));
+  uint16_t tcp_checksum = htons(get_checksum(checksum_buffer, 32));
+  pack.tcp.check = tcp_checksum;
 
-  pack.tcp.check = get_check(buffer, tcp_total_len);
+  // sending
 
-  free(buffer);
-
-  // sending & recving
-
-  if (send_pack(sock, (uint8_t *)&pack, sizeof(struct tcph_packet_t), sa) < 0)
-    return -1;
-
-  uint8_t *recv_buffer = (uint8_t *)calloc(1, 128);
-  struct tcph_packet_t *r_pack = (struct tcph_packet_t *)recv_buffer;
-
-  while (1) {
-    int recved = recv_pack(sock, recv_buffer, 128);
-
-    // Dest and protocol validation
-    if (recved <= 0)
-      return -1;
-
-    if (r_pack->ip.protocol != IPPROTO_TCP)
-      continue;
-
-    if (memcmp(r_pack->eth.h_dest, eth->h_source, 6) != 0)
-      continue;
-
-    if (memcmp(&r_pack->ip.daddr, &ip->saddr, 4) != 0)
-      continue;
-
-    if (r_pack->tcp.dest != pack.tcp.source)
-      continue;
-
-    // Tcp validation
-    if (!r_pack->tcp.ack || r_pack->tcp.fin) {
-      printf("Connection closed on tcp layer (syn)\n");
-      return -1;
-    };
-
-    printf("Syn-ack received\n");
-    break;
-
-    /*
-    for (int i = 0; i < recved; i++) {
-      printf("%02x%s", recv_buffer[i],
-             ((i + 1) % 16 == 0 || (i + 1) == recved) ? "\n" : " ");
-    };
-    */
-  };
-
-  // UNCHECKED / NEEDED TO REVIEW:
-  uint32_t serv_seq = ntohl(r_pack->tcp.seq);
-
-  pack.tcp.seq = htonl(0x10101011);
-  pack.tcp.ack_seq = htonl(serv_seq + 1);
-
-  pack.tcp.ack = 1;
-  pack.tcp.syn = 0; // removing flag
-
-  pack.tcp.check = 0;
-  buffer = (uint8_t *)calloc(1, 128);
-
-  memcpy(buffer, pseudo_h, sizeof(struct pseudo_h_t));
-  memcpy(buffer + sizeof(struct pseudo_h_t), &pack.tcp, sizeof(struct tcphdr));
-
-  pack.tcp.check = get_check(buffer, tcp_total_len);
-
-  free(buffer);
-
-  if (sendto(sock, &pack, sizeof(struct tcph_packet_t), 0,
-             (struct sockaddr *)sa, sizeof(struct sockaddr_ll)) < 0) {
-    printf("ack sending failed\n");
-  };
-
-  return 0;
-};
-
-/*
-int _sync_ack(int sock, struct sockaddr_ll *sa, struct ethhdr *eth,
-              struct iphdr *ip);
-*/
-
-int send_pack(int sock, uint8_t *buf, size_t buf_s, struct sockaddr_ll *sa) {
-  int sended = sendto(sock, buf, buf_s, 0, (struct sockaddr *)sa,
-                      sizeof(struct sockaddr_ll));
-  if (sended <= 0) {
-    fprintf(stderr, "[sock/ERROR]: sending failed\n");
+  if (sendto(sock, &pack, sizeof(struct tcp_pack_t), 0, (struct sockaddr *)sa,
+             sizeof(struct sockaddr_ll)) < 0) {
+    printf("_syn cannot send packet\n");
     return -1;
   };
 
-  return 0;
-};
+  /* Debug */
+  printf(">>>\n");
+  for (int i = 0; i < 64; i++) {
+    printf("%02x%s", *(((uint8_t *)&pack) + i),
+           ((i + 1) % 16 == 0 || (i + 1) == 64) ? "\n" : " ");
+  };
+  printf("\n");
 
-int recv_pack(int sock, uint8_t *buf, size_t buf_s) {
-  int recved = recvfrom(sock, buf, buf_s, 0, NULL, NULL);
+  // receiving
+  uint8_t recv_buffer[256] = {0};
 
-  if (recved <= 0) {
-    fprintf(stderr, "[sock/ERROR]: receiving failed\n");
+  if (recvfrom(sock, recv_buffer, 256, 0, NULL, NULL) < 0) {
+    printf("_syn cannot receive any data (timeout connection or connection "
+           "reseted)\n");
     return -1;
   };
 
-  return recved;
+  // XXX: Maybe I should make receiving and validating in another function
+  // named
+  // "_r_syn_ack" ??? -- Yeah, i think you need. Try to realize that idea in
+  // next commit
+
+  /* Debug */
+  printf("<<<\n");
+  for (int i = 0; i < 64; i++) {
+    printf("%02x%s", recv_buffer[i],
+           ((i + 1) % 16 == 0 || (i + 1) == 64) ? "\n" : " ");
+  };
 };
-
-// WARN: Idk how it's works
-uint16_t get_check(const uint8_t *addr, size_t count) {
-  uint32_t sum = 0;
-  const uint16_t *ptr = (const uint16_t *)addr;
-
-  while (count > 1) {
-    sum += *ptr++;
-    count -= 2;
-  }
-
-  if (count > 0) {
-    sum += *(const uint8_t *)ptr;
-  }
-
-  while (sum >> 16) {
-    sum = (sum & 0xFFFF) + (sum >> 16);
-  }
-
-  return (uint16_t)(~sum);
-}
