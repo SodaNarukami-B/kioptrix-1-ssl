@@ -12,7 +12,7 @@
 
 #include "./src/tcp/module_ptr.h"
 
-const char *saddr = "192.168.1.47";
+const char *saddr = "192.168.1.11";
 const char *daddr = "192.168.1.42";
 
 const uint8_t shaddr[6] = {0x08, 0x00, 0x27, 0xc9, 0xb7, 0xe3};
