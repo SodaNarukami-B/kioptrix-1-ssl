@@ -1,4 +1,37 @@
+// It's a third rework of tcp module
+//
+// What we need:
+// We need a library with one function that setups a full tcp handshake
+//
+// Structure:
+// I think I must do a splited structure and that mini-functions must be
+// called in 1 main function of module. Like this:
+// ```
+// int _syn(int sock, ...);
+// int _r_syn_ack(int sock, ...);
+// int _ack(int sock, ...);
+//
+// int set_handshake(int sock, ...) {
+//   _syn(int sock, ...);
+//   _r_syn_ack(int sock, ...);
+//   _ack(int sock, ...);
+// }
+// ```
+// More details:
+// I think we need to pass structures like [ethhdr] and [iphdr] as pointers
+// to hard addresses and ip addresses and that structures must be filled in
+// master file like configuration. Then we can use that example:
+// >>> int _syn(int sock, struct ethhdr *eth, struct iphdr *ip, ...);
+// That allows us to pass all needed data in 2-3 structures. And we can change
+// data on pointers from _syn or other function.
+// Also I think about structure that allows pass tcp connection info like ports,
+// seq numbers and other useful data. So final base count of passing arguments
+// (expect socket) is 3 - eth, ip and new structure named like tcp_conn
+//
+// Let's start!
+
 #include <arpa/inet.h>
+#include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 
@@ -9,27 +42,11 @@
 
 #include "./module_ptr.h"
 
-// NOTE: Rework plan
-//
-// What we need?
-// - Splited archetecture    *
-// - More steps of receiving -
-//
-// Also i think about archetecture like this:
-// int handshake() {
-//   uint8_t buffer[];
-//   _syn(&buffer);
-//   if (_syn_acked) {
-//     _ack();
-//   }
-// };
-
-// Realization
+//////// Structures ////////
 
 #pragma pack(push, 1)
 
-// Main header structure (eth + ip + tcp)
-struct tcp_pack_t {
+struct tcp_handshake_t {
   struct ethhdr eth;
   struct iphdr ip;
   struct tcphdr tcp;
@@ -39,210 +56,90 @@ struct pshdr {
   uint32_t saddr;
   uint32_t daddr;
   uint8_t zero;
-  uint8_t proto;
+  uint8_t ipproto;
   uint16_t tcp_len;
 };
 
-#pragma pack(pop)
+#pragma pack(pop, 1)
 
-// NOTE: Initialization / callable talbe
-int _syn(int sock, struct ethhdr *eth, struct iphdr *ip, struct tcp_conn_t *tcp,
-         struct sockaddr_ll *sa);
-int _r_syn_ack(int sock, void *buf, size_t buf_size, struct ethhdr *eth,
-               struct iphdr *ip, struct tcp_conn_t *tcp_conn);
-int _ack(int sock, struct ethhdr *eth, struct iphdr *ip, struct tcp_conn_t *tcp,
-         struct sockaddr_ll *sa);
-int set_handshake(int sock, struct ethhdr *eth, struct iphdr *ip,
-                  struct tcp_conn_t *tcp, struct sockaddr_ll *sa);
-uint16_t get_checksum(void *ptr, size_t len);
+//////// Initialization ////////
 
-// NOTE: Realization | Main thread
-int set_handshake(int sock, struct ethhdr *eth, struct iphdr *ip,
-                  struct tcp_conn_t *tcp_conn, struct sockaddr_ll *sa) {
+// That a mini functions, using just for optimization of code writing
+uint16_t get_checksum(void *ptr, size_t count);
+int _send(int sock, void *ptr, struct sockaddr_ll *sa);
+int _recv(int sock, void *buf, size_t buf_size);
 
-  uint8_t recv_buffer[1024] = {0};
+// That a modules for tcp handshake
 
-  if (_syn(sock, eth, ip, tcp_conn, sa) < 0)
-    return -1;
+// Syncronize - first step of tcp handshake
+int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
+         const struct iphdr *ip, TCP_CONN *tcp_conn);
 
-  while (1) {
-    if (_r_syn_ack(sock, recv_buffer, 1024, eth, ip, tcp_conn) == 0)
-      break;
-    memset(recv_buffer, 0, 1024);
-  };
+// Function for receive and parse resporse on our packet sended in syncronize
+// step
+int _r_syn_ack(int sock, void *buf, size_t buf_size, const struct ethhdr *eth,
+               const struct iphdr *ip, TCP_CONN *tcp_conn);
 
-  // _ack(sock, eth, ip, tcp_conn, sa);
-  return 0;
-};
+// Ack - Third step of tcp handshake
+int _ack(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
+         const struct iphdr *ip, TCP_CONN *tcp_conn);
 
-// NOTE: Realization / child functions
-int _syn(int sock, struct ethhdr *eth, struct iphdr *ip,
-         struct tcp_conn_t *tcp_conn, struct sockaddr_ll *sa) {
-  struct tcp_pack_t pack;
-  memset(&pack, 0, sizeof(struct tcp_pack_t));
+// Main function
+int set_handshake(int sock, const struct sockaddr_ll *sa,
+                  const struct ethhdr *eth, const struct iphdr *ip,
+                  TCP_CONN *tcp_conn);
 
-  // ethhdr
-  memcpy(pack.eth.h_dest, eth->h_dest, 6);
-  memcpy(pack.eth.h_source, eth->h_source, 6);
-  pack.eth.h_proto = htons(ETH_P_IP);
+//////// Realization ////////
 
-  // iphdr
-  uint16_t tcp_ip_len =
-      htons(sizeof(struct tcp_pack_t) - sizeof(struct ethhdr));
+int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
+         const struct iphdr *ip, TCP_CONN *tcp_conn) {
+  struct tcp_handshake_t packet;
+  memset(&packet, 0, sizeof(struct tcp_handshake_t));
 
-  pack.ip.version = ip->version;
-  pack.ip.ihl = ip->ihl;
-  pack.ip.tot_len = tcp_ip_len;
-  pack.ip.ttl = ip->ttl;
-  pack.ip.protocol = ip->protocol;
-  // For correctly checksum calculating, we setting zero checksum before
-  // calculating
-  pack.ip.check = 0;
-  // Copying addresses
-  memcpy((uint8_t *)&pack.ip.saddr, (uint8_t *)&ip->saddr, 4);
-  memcpy((uint8_t *)&pack.ip.daddr, (uint8_t *)&ip->daddr, 4);
+  // Ethhdr
+  memcpy(&packet.eth.h_dest, eth->h_dest, 6);
+  memcpy(&packet.eth.h_source, eth->h_source, 6);
+  packet.eth.h_proto = htons(ETH_P_IP);
 
-  // Now we can calc checksum
-  pack.ip.check = get_checksum(&pack.ip, sizeof(struct iphdr));
+  // Iphdr
+  uint16_t ip_tcp_len = sizeof(struct iphdr) + sizeof(struct tcphdr);
 
-  // tcphdr
-  pack.tcp.source = tcp_conn->s_port;
-  pack.tcp.dest = tcp_conn->d_port;
-  pack.tcp.seq = htonl(tcp_conn->client_seq);
-  /*
-    uint8_t data_offset =
-        ((uint8_t *)(&pack.tcp.urg_ptr + 1) - (uint8_t *)(&pack.tcp)) / 4;
-                    ^^^^^^^^^^^^^^^^^^^^^^^
-    TIP: You can use that method when there is external options or non-zero
-    payload
-  */
-  pack.tcp.doff = sizeof(struct tcphdr) / 4;
-  pack.tcp.syn = 1;
-  pack.tcp.window = 0xffff;
-  pack.tcp.check = 0; // Same like in iphdr
+  packet.ip.version = 4;
+  packet.ip.ihl = sizeof(struct iphdr) / 4;
+  packet.ip.tot_len = htons(ip_tcp_len);
+  packet.ip.ttl = 64;
+  packet.ip.protocol = IPPROTO_TCP;
+  packet.ip.check = 0;
+  packet.ip.saddr = ip->saddr;
+  packet.ip.daddr = ip->daddr;
 
-  // Checksum in tcp need another method for correct calc
-  uint8_t checksum_buffer[32];
-  memset(checksum_buffer, 0, 32);
+  packet.ip.check = 0;
 
-  struct pshdr *pseudo = (struct pshdr *)&checksum_buffer;
+  packet.tcp.source = tcp_conn->source;
+  packet.tcp.dest = tcp_conn->dest;
+  packet.tcp.seq = htonl(tcp_conn->client_seq);
+  packet.tcp.doff = sizeof(struct tcphdr) / 4;
+  packet.tcp.syn = 1;
+  packet.tcp.window = 0xffff;
+  packet.tcp.check = 0;
 
-  memcpy(checksum_buffer + sizeof(struct pshdr), &pack.tcp,
+  uint8_t checksum_buf[sizeof(struct pshdr) + sizeof(struct tcphdr)] = {0};
+
+  struct pshdr *ps = (struct pshdr *)checksum_buf;
+
+  memcpy(checksum_buf + sizeof(struct pshdr), &packet.tcp,
          sizeof(struct tcphdr));
 
-  pseudo->saddr = ip->saddr;
-  pseudo->daddr = ip->daddr;
-  pseudo->proto = IPPROTO_TCP;
-  pseudo->tcp_len = htons(sizeof(struct tcphdr));
+  ps->saddr = ip->saddr;
+  ps->daddr = ip->daddr;
+  ps->ipproto = IPPROTO_TCP;
+  ps->tcp_len = htons(sizeof(struct tcphdr));
 
-  uint16_t tcp_checksum = get_checksum(checksum_buffer, 32);
-  pack.tcp.check = tcp_checksum;
+  packet.tcp.check = get_checksum(checksum_buf, sizeof(checksum_buf));
 
-  // sending
+  // BUG: Packet not sended
 
-  if (sendto(sock, &pack, sizeof(struct tcp_pack_t), 0, (struct sockaddr *)sa,
-             sizeof(struct sockaddr_ll)) < 0) {
-    printf("_syn cannot send packet\n");
-    return -1;
-  };
-
-  /* Debug */
-  printf(">>>\n");
-  for (int i = 0; i < 64; i++) {
-    printf("%02x%s", *(((uint8_t *)&pack) + i),
-           ((i + 1) % 16 == 0 || (i + 1) == 64) ? "\n" : " ");
-  };
-  printf("\n");
-
-  return 0;
+  // DEV
 };
 
-int _r_syn_ack(int sock, void *buf, size_t buf_size, struct ethhdr *eth,
-               struct iphdr *ip, struct tcp_conn_t *tcp_conn) {
-  int res = recvfrom(sock, buf, buf_size, 0, NULL, NULL);
-  if (res <= 0) {
-    printf("_r_syn_ack cannot receive any data (errcode: %d)\n", res);
-    return -1;
-  };
-
-  // Eth checking
-  struct ethhdr *recv_eth = (struct ethhdr *)buf;
-
-  if (memcmp(recv_eth->h_source, eth->h_dest, 6) != 0)
-    return -1;
-  printf("h_source & h_dest [+]\n");
-
-  if (memcmp(recv_eth->h_dest, eth->h_source, 6) != 0)
-    return -1;
-  printf("h_dest & h_souce [+]\n");
-
-  if (recv_eth->h_proto != htons(ETH_P_IP))
-    return -1;
-  printf("h_proto [+]\n");
-
-  // Ip checking
-  struct iphdr *recv_ip = (struct iphdr *)(buf + sizeof(struct ethhdr));
-
-  if (recv_ip->version != 4)
-    return -1;
-  printf("IP version [+]\n");
-
-  if (recv_ip->protocol != IPPROTO_TCP)
-    return -1;
-  printf("IP protocol [+]\n");
-
-  if (memcmp(&recv_ip->saddr, &ip->daddr, 4) != 0)
-    return -1;
-  printf("source & dest [+]\n");
-
-  if (memcmp(&recv_ip->daddr, &ip->saddr, 4) != 0)
-    return -1;
-  printf("dest & source [+]\n");
-
-  // Tcp checking
-  struct tcphdr *recv_tcp =
-      (struct tcphdr *)(buf + sizeof(struct ethhdr) + sizeof(struct iphdr));
-
-  if (recv_tcp->source != tcp_conn->d_port)
-    return -1;
-  printf("s_port & d_port [+]\n");
-
-  if (recv_tcp->dest != tcp_conn->s_port)
-    return -1;
-  printf("d_port & s_port [+]\n");
-
-  if (ntohl(recv_tcp->ack_seq) != tcp_conn->client_seq + 1)
-    return -1;
-  printf("ack_seq is equal cliect seq + 1 [+]\n");
-
-  tcp_conn->serv_seq = ntohl(recv_tcp->seq);
-
-  if (!recv_tcp->syn || !recv_tcp->ack)
-    return -1;
-  printf("packet is syn-ack [+]\n");
-
-  return 0;
-};
-
-uint16_t get_checksum(void *ptr, size_t len) {
-  const uint16_t *p = (uint16_t *)ptr;
-
-  uint32_t result = 0;
-
-  while (len > 1) {
-    result += *p++;
-    len -= 2;
-  };
-
-  if (len > 0) {
-    result += *(const uint8_t *)p;
-  };
-
-  while (result >> 16) {
-    result = (result & 0xffff) + (result >> 16);
-  };
-
-  return (uint16_t)(~result); // In host order
-};
-
-;
+// DEV
