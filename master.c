@@ -51,8 +51,8 @@ int main() {
   memset(&eth, 0, sizeof(struct ethhdr));
   struct iphdr ip;
   memset(&ip, 0, sizeof(struct iphdr));
-  struct tcp_conn_t tcp_conn_info;
-  memset(&tcp_conn_info, 0, sizeof(struct tcp_conn_t));
+  TCP_CONN tcp_conn_info;
+  memset(&tcp_conn_info, 0, sizeof(TCP_CONN));
 
   // Ethhdr
   memcpy(eth.h_source, shaddr, 6);
@@ -70,11 +70,11 @@ int main() {
   inet_pton(AF_INET, daddr, (uint8_t *)&ip.daddr);
 
   // Tcp conn info
-  tcp_conn_info.s_port = htons(60001);
-  tcp_conn_info.d_port = htons(443);
+  tcp_conn_info.source = htons(60001);
+  tcp_conn_info.dest = htons(443);
   tcp_conn_info.client_seq = 0x10101010;
 
-  int handshake_report = set_handshake(sock, &eth, &ip, &tcp_conn_info, &sa);
+  int handshake_report = set_handshake(sock, &sa, &eth, &ip, &tcp_conn_info);
 
   if (handshake_report < 0) {
     printf("[master/ERROR]: tcphandshake failed\n");

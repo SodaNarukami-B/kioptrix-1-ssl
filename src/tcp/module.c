@@ -60,13 +60,13 @@ struct pshdr {
   uint16_t tcp_len;
 };
 
-#pragma pack(pop, 1)
+#pragma pack(pop)
 
 //////// Initialization ////////
 
 // That a mini functions, using just for optimization of code writing
 uint16_t get_checksum(void *ptr, size_t count);
-int _send(int sock, void *ptr, struct sockaddr_ll *sa);
+int _send(int sock, void *ptr, size_t len, const struct sockaddr_ll *sa);
 int _recv(int sock, void *buf, size_t buf_size);
 
 // That a modules for tcp handshake
@@ -91,6 +91,18 @@ int set_handshake(int sock, const struct sockaddr_ll *sa,
 
 //////// Realization ////////
 
+int set_handshake(int sock, const struct sockaddr_ll *sa,
+                  const struct ethhdr *eth, const struct iphdr *ip,
+                  TCP_CONN *tcp_conn) {
+  printf("[tcp/INFO]: setting tcp handshake\n");
+
+  // Steps
+  if (_syn(sock, sa, eth, ip, tcp_conn) < 0) {
+    return -1;
+  };
+
+  return 0;
+};
 int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
          const struct iphdr *ip, TCP_CONN *tcp_conn) {
   struct tcp_handshake_t packet;
@@ -113,8 +125,9 @@ int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
   packet.ip.saddr = ip->saddr;
   packet.ip.daddr = ip->daddr;
 
-  packet.ip.check = 0;
+  packet.ip.check = get_checksum(&packet.ip, sizeof(struct iphdr));
 
+  // Tcp
   packet.tcp.source = tcp_conn->source;
   packet.tcp.dest = tcp_conn->dest;
   packet.tcp.seq = htonl(tcp_conn->client_seq);
@@ -137,9 +150,35 @@ int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
 
   packet.tcp.check = get_checksum(checksum_buf, sizeof(checksum_buf));
 
-  // BUG: Packet not sended
+  int sended = sendto(sock, &packet, sizeof(struct tcp_handshake_t), 0,
+                      (const struct sockaddr *)sa, sizeof(struct sockaddr_ll));
 
-  // DEV
+  if (sended <= 0) {
+    printf("[tcp/ERROR]: failed to send syncronize\n");
+  };
+
+  printf("[tcp/INFO]: syncronize sended\n");
+};
+
+uint16_t get_checksum(void *ptr, size_t count) {
+  uint16_t *p = (uint16_t *)ptr;
+
+  uint32_t result = 0;
+
+  while (count > 1) {
+    result += *p++;
+    count -= 2;
+  };
+
+  if (count > 0) {
+    result += *(uint8_t *)p;
+  };
+
+  while (result >> 16) {
+    result = (result & 0xffff) + (result >> 16);
+  };
+
+  return (uint16_t)(~result);
 };
 
 // DEV
