@@ -96,13 +96,33 @@ int set_handshake(int sock, const struct sockaddr_ll *sa,
                   TCP_CONN *tcp_conn) {
   printf("[tcp/INFO]: setting tcp handshake\n");
 
+  uint8_t buffer[1024] = {0};
+
   // Steps
   if (_syn(sock, sa, eth, ip, tcp_conn) < 0) {
     return -1;
   };
 
+  printf("[tcp/INFO]: waiting for syn ack (0)");
+  fflush(stdout);
+
+  int counter = 0;
+
+  while (1) {
+    counter++;
+
+    if (_r_syn_ack(sock, buffer, 1024, eth, ip, tcp_conn) == 0) {
+      printf("\n");
+      printf("[tcp/INFO]: syn-ack received\n");
+      break;
+    };
+
+    printf("\r[tcp/INFO]: waiting for syn ack (%d)", counter);
+  };
+
   return 0;
 };
+
 int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
          const struct iphdr *ip, TCP_CONN *tcp_conn) {
   struct tcp_handshake_t packet;
@@ -158,6 +178,72 @@ int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
   };
 
   printf("[tcp/INFO]: syncronize sended\n");
+
+  return 0;
+};
+
+int _r_syn_ack(int sock, void *buf, size_t buf_size, const struct ethhdr *eth,
+               const struct iphdr *ip, TCP_CONN *tcp_conn) {
+  int recved = recvfrom(sock, buf, buf_size, 0, NULL, NULL);
+
+  if (recved < 0) {
+    printf("[tcp/ERROR]: connection timeout\n");
+    return -1;
+  };
+
+  if (recved == 0) {
+    printf("[tcp/ERROR]: connection closed by remote host\n");
+    return -1;
+  };
+
+  // BUG: Casting cosntant structure to dynamic data. Here's can be additional
+  //      options for ip header that doesn't existis in casting structure
+  //
+  // TIP: You need to parse fields depending on size-fields like IHL and Data
+  //      Offset. Also you can use down code as TODO list what needed to be
+  //
+  // PS: Checksum validating also needed but im not a nerd bruh.
+
+  struct tcp_handshake_t *recv_pack = (struct tcp_handshake_t *)buf;
+  // eth
+  if (ntohs(recv_pack->eth.h_proto) != ETH_P_IP)
+    return -1;
+
+  if (memcmp(recv_pack->eth.h_source, eth->h_dest, 6) != 0)
+    return -1;
+
+  if (memcmp(recv_pack->eth.h_dest, eth->h_source, 6) != 0)
+    return -1;
+
+  // ip
+  if (recv_pack->ip.version != 4)
+    return -1;
+
+  if (recv_pack->ip.protocol != IPPROTO_TCP)
+    return -1;
+
+  if (recv_pack->ip.saddr != ip->daddr)
+    return -1;
+
+  if (recv_pack->ip.daddr != ip->saddr)
+    return -1;
+
+  // tcp
+  if (recv_pack->tcp.source != tcp_conn->dest)
+    return -1;
+
+  if (recv_pack->tcp.dest != tcp_conn->source)
+    return -1;
+
+  if (ntohl(recv_pack->tcp.ack_seq) != (tcp_conn->client_seq + 1))
+    return -1;
+
+  tcp_conn->serv_seq = ntohl(recv_pack->tcp.seq);
+
+  if (!(recv_pack->tcp.syn && recv_pack->tcp.ack) || recv_pack->tcp.fin)
+    return -1;
+
+  return 0;
 };
 
 uint16_t get_checksum(void *ptr, size_t count) {
