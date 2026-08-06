@@ -4,20 +4,18 @@
 
 #include <netinet/ip.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Aliases
 #include "./module_ptr.h"
 
-/* TODO: Make a structure for returning a size of all options and array with
-   pointers to that options and return that structure in parser. It's need to
-   give main function abillity to choose what that would do with options (skip
-   or parse and determinie behaviour depending to options)
-*/
-uint8_t *_parse_iphdr(const struct iphdr *hdr) {
+// TODO: Test with self-maded ip headers with different optinons (use GDB
+// brooo);
+
+uint8_t _parse_iphdr(const struct iphdr *hdr, const uint8_t *opts_out[40]) {
 
   // Collecting options
-  uint8_t *options_ptrs[40] = {0};
 
   const size_t total_length = hdr->ihl * 4;
   if (total_length == sizeof(struct iphdr))
@@ -40,20 +38,34 @@ uint8_t *_parse_iphdr(const struct iphdr *hdr) {
       continue;
     };
 
-    uint8_t len = *(opt_ptr + 1);
+    uint8_t len = *(opt_ptr + 1); // We NEED to make this variable for then
+                                  // alloc a right size for structure
 
     if (len < 2 || (parsed_bytes + len) > total_options_length) {
       printf("[parser/WARN]: bad option len\n");
       break;
     };
 
-    options_ptrs[opt_count] = opt_ptr;
+    opts_out[opt_count] = opt_ptr;
     opt_count++;
 
-    opt_ptr++;
+    opt_ptr += len;
     parsed_bytes += len;
   };
 
-  // Now we can parse that options
-  // (DEV)
+  return opt_count;
+
+  // In-dev process:
+  // Soda >> Like we first checking that optinon is not a 00 or 01, then we
+  // grabbing length of option from header's memory and allocating NEW memory
+  // with size of option; copying optinon to 'accessed' memory, filling the
+  // structure of ip option and adding pointer to that structure to array with
+  // pointers to optinons
+  //
+  // It's not a final logic of this place btw and this place is NOT done. Just
+  // making drafts
+  //
+  // Soda >> Boolshit. It's anti-pattern. You need just return the array with
+  // pointers to options inside a header, do NOT alloc a new memory just for
+  // user protecting
 };

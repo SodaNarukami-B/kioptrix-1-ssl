@@ -17,9 +17,29 @@ typedef struct {
   uint32_t serv_seq;
 } TCP_CONN;
 
+struct ip_opt {
+  uint8_t opt;
+  uint8_t len;
+  uint8_t *body;
+};
+
+struct ip_options {
+  size_t count;
+  struct ip_opt *opts;
+};
+
 #pragma pack(pop)
 
+// Main function
 int set_handshake(int sock, const struct sockaddr_ll *sa,
                   const struct ethhdr *eth, const struct iphdr *ip,
                   TCP_CONN *tcp_conn);
+
+// Parsers
+//
+// Takes poiter to header and pointer
+uint8_t _parse_iphdr(const struct iphdr *hdr, const uint8_t *opt_out[40]);
+
+uint8_t *_parse_tcphdr(const struct tcphdr *hdr);
+
 #endif
