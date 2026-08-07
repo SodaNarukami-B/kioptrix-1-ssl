@@ -12,8 +12,11 @@
 
 // TODO: Test with self-maded ip headers with different optinons (use GDB
 // brooo);
+//
+// Soda >> Nuh, gdb not needed. I save test function, maybe you need it in
+// future
 
-uint8_t _parse_iphdr(const struct iphdr *hdr, const uint8_t *opts_out[40]) {
+uint8_t _parse_iphdr(const struct iphdr *hdr, uint8_t *opts_out[40]) {
 
   // Collecting options
 
@@ -38,8 +41,7 @@ uint8_t _parse_iphdr(const struct iphdr *hdr, const uint8_t *opts_out[40]) {
       continue;
     };
 
-    uint8_t len = *(opt_ptr + 1); // We NEED to make this variable for then
-                                  // alloc a right size for structure
+    uint8_t len = *(opt_ptr + 1);
 
     if (len < 2 || (parsed_bytes + len) > total_options_length) {
       printf("[parser/WARN]: bad option len\n");
@@ -54,18 +56,41 @@ uint8_t _parse_iphdr(const struct iphdr *hdr, const uint8_t *opts_out[40]) {
   };
 
   return opt_count;
-
-  // In-dev process:
-  // Soda >> Like we first checking that optinon is not a 00 or 01, then we
-  // grabbing length of option from header's memory and allocating NEW memory
-  // with size of option; copying optinon to 'accessed' memory, filling the
-  // structure of ip option and adding pointer to that structure to array with
-  // pointers to optinons
-  //
-  // It's not a final logic of this place btw and this place is NOT done. Just
-  // making drafts
-  //
-  // Soda >> Boolshit. It's anti-pattern. You need just return the array with
-  // pointers to options inside a header, do NOT alloc a new memory just for
-  // user protecting
 };
+
+#ifdef BUILD_TEST
+
+int main() {
+  uint8_t buff[sizeof(struct iphdr) + 40] = {0};
+  int options = 3;
+
+  struct iphdr *hdr = (struct iphdr *)buff;
+  hdr->ihl = (sizeof(struct iphdr) + 16) / 4;
+
+  uint8_t options_data[] = {0x07, 0x07, 0x08, 0xC0, 0xA8, 0x01, 0x01,
+
+                            0x89, 0x03, 0x04,
+
+                            0x44, 0x06, 0x05, 0x01, 0xAA, 0xBB};
+  memcpy(buff + sizeof(struct iphdr), options_data, sizeof(options_data));
+
+  uint8_t *opts[40] = {0};
+
+  printf("in_opts=%d\n", options);
+  int opt_count = _parse_iphdr((struct iphdr *)buff, opts);
+  printf("prsd_opts=%d\n", opt_count);
+
+  for (int i = 0; i < opt_count; i++) {
+    uint8_t *ptr = opts[i];
+
+    printf("{\n\tOption: %02x\n\tLen: %d\n\tData: ", *(ptr), *(ptr + 1));
+    for (int d = 0; d < *(ptr + 1) - 2; d++) {
+      printf("%02x%s", *(ptr + 2 + d),
+             ((d + 1) == *(ptr + 1) - 2) ? "\n}\n" : " ");
+    };
+  };
+
+  return 0;
+};
+
+#endif
