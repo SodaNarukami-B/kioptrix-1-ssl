@@ -203,44 +203,60 @@ int _r_syn_ack(int sock, void *buf, size_t buf_size, const struct ethhdr *eth,
   //      Offset. Also you can use down code as TODO list what needed to be
   //
   // PS: Checksum validating also needed but im not a nerd bruh.
+  //
+  // Soda >> Fixed. I also added ip options parsing. Next i would make parsing
+  // tcp options.
 
-  struct tcp_handshake_t *recv_pack = (struct tcp_handshake_t *)buf;
+  const struct ethhdr *recv_eth = (struct ethhdr *)buf;
+
+  const struct iphdr *recv_ip = (struct iphdr *)(buf + sizeof(struct ethhdr));
+
+  uint8_t *ip_opts[40] = {0};
+  int ip_opts_count = _parse_iphdr(recv_ip, ip_opts);
+
+  if (ip_opts_count) {
+    printf("[tcp/INFO]: Received %d options for ip header\n", ip_opts_count);
+  };
+
+  const struct tcphdr *recv_tcp =
+      (struct tcphdr *)(buf + sizeof(struct ethhdr) + recv_ip->ihl * 4);
+
   // eth
-  if (ntohs(recv_pack->eth.h_proto) != ETH_P_IP)
+  if (ntohs(recv_eth->h_proto) != ETH_P_IP)
     return -1;
 
-  if (memcmp(recv_pack->eth.h_source, eth->h_dest, 6) != 0)
+  if (memcmp(recv_eth->h_source, eth->h_dest, 6) != 0)
     return -1;
 
-  if (memcmp(recv_pack->eth.h_dest, eth->h_source, 6) != 0)
+  if (memcmp(recv_eth->h_dest, eth->h_source, 6) != 0)
     return -1;
 
   // ip
-  if (recv_pack->ip.version != 4)
+  if (recv_ip->version != 4)
     return -1;
 
-  if (recv_pack->ip.protocol != IPPROTO_TCP)
+  if (recv_ip->protocol != IPPROTO_TCP)
     return -1;
 
-  if (recv_pack->ip.saddr != ip->daddr)
+  if (recv_ip->saddr != ip->daddr)
     return -1;
 
-  if (recv_pack->ip.daddr != ip->saddr)
+  if (recv_ip->daddr != ip->saddr)
     return -1;
 
   // tcp
-  if (recv_pack->tcp.source != tcp_conn->dest)
+  if (recv_tcp->source != tcp_conn->dest)
     return -1;
 
-  if (recv_pack->tcp.dest != tcp_conn->source)
+  if (recv_tcp->dest != tcp_conn->source)
     return -1;
 
-  if (ntohl(recv_pack->tcp.ack_seq) != (tcp_conn->client_seq + 1))
+  if (ntohl(recv_tcp->ack_seq) != (tcp_conn->client_seq + 1))
     return -1;
 
-  tcp_conn->serv_seq = ntohl(recv_pack->tcp.seq);
+  tcp_conn->serv_seq = ntohl(recv_tcp->seq);
 
-  if (!(recv_pack->tcp.syn && recv_pack->tcp.ack) || recv_pack->tcp.fin)
+  if (!(recv_tcp->syn && recv_tcp->ack) || recv_tcp->fin)
     return -1;
 
   return 0;

@@ -10,15 +10,7 @@
 // Aliases
 #include "./module_ptr.h"
 
-// TODO: Test with self-maded ip headers with different optinons (use GDB
-// brooo);
-//
-// Soda >> Nuh, gdb not needed. I save test function, maybe you need it in
-// future
-
-uint8_t _parse_iphdr(const struct iphdr *hdr, uint8_t *opts_out[40]) {
-
-  // Collecting options
+int _parse_iphdr(const struct iphdr *hdr, uint8_t *opts_out[40]) {
 
   const size_t total_length = hdr->ihl * 4;
   if (total_length == sizeof(struct iphdr))
@@ -94,3 +86,5 @@ int main() {
 };
 
 #endif
+
+/* EOF */
