@@ -118,9 +118,10 @@ int set_handshake(int sock, const struct sockaddr_ll *sa,
     };
 
     printf("\r[tcp/INFO]: waiting for syn ack (%d)", counter);
+    fflush(stdout);
   };
 
-  return 0;
+  return _ack(sock, sa, eth, ip, tcp_conn);
 };
 
 int _syn(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
@@ -196,68 +197,64 @@ int _r_syn_ack(int sock, void *buf, size_t buf_size, const struct ethhdr *eth,
     return -1;
   };
 
-  // BUG: Casting cosntant structure to dynamic data. Here's can be additional
-  //      options for ip header that doesn't existis in casting structure
-  //
-  // TIP: You need to parse fields depending on size-fields like IHL and Data
-  //      Offset. Also you can use down code as TODO list what needed to be
-  //
-  // PS: Checksum validating also needed but im not a nerd bruh.
-  //
-  // Soda >> Fixed. I also added ip options parsing. Next i would make parsing
-  // tcp options.
-
-  const struct ethhdr *recv_eth = (struct ethhdr *)buf;
-
-  const struct iphdr *recv_ip = (struct iphdr *)(buf + sizeof(struct ethhdr));
-
   uint8_t *ip_opts[40] = {0};
-  int ip_opts_count = _parse_iphdr(recv_ip, ip_opts);
+  int ip_opts_c = 0;
 
-  if (ip_opts_count) {
-    printf("[tcp/INFO]: Received %d options for ip header\n", ip_opts_count);
+  if (parse_tcpip_fields(buf, recved, eth, ip, tcp_conn, (void *)ip_opts,
+                         ip_opts_c) != 0)
+    return -1;
+
+  return 0;
+};
+
+int _ack(int sock, const struct sockaddr_ll *sa, const struct ethhdr *eth,
+         const struct iphdr *ip, TCP_CONN *tcp_conn) {
+  struct tcp_handshake_t packet;
+
+  memset(&packet, 0, sizeof(struct tcp_handshake_t));
+
+  memcpy(packet.eth.h_dest, eth->h_dest, 6);
+  memcpy(packet.eth.h_source, eth->h_source, 6);
+  packet.eth.h_proto = htons(ETH_P_IP);
+
+  packet.ip.version = 4;
+  packet.ip.ihl = sizeof(struct iphdr) / 4;
+  packet.ip.tot_len = htons(sizeof(struct iphdr) + sizeof(struct tcphdr));
+  packet.ip.ttl = 64;
+  packet.ip.protocol = IPPROTO_TCP;
+  packet.ip.saddr = ip->saddr;
+  packet.ip.daddr = ip->daddr;
+
+  packet.ip.check = get_checksum(&packet.ip, sizeof(struct iphdr));
+
+  packet.tcp.source = tcp_conn->source;
+  packet.tcp.dest = tcp_conn->dest;
+  tcp_conn->client_seq += 1;
+  tcp_conn->serv_seq += 1;
+  packet.tcp.seq = htonl(tcp_conn->client_seq);
+  packet.tcp.ack_seq = htonl(tcp_conn->serv_seq);
+  packet.tcp.doff = sizeof(struct tcphdr) / 4;
+  packet.tcp.ack = 1;
+  packet.tcp.window = 0xffff;
+
+  uint8_t check_buf[sizeof(struct pshdr) + sizeof(struct tcphdr)] = {0};
+
+  struct pshdr *ps = (struct pshdr *)check_buf;
+  memcpy(check_buf + sizeof(struct pshdr), &packet.tcp, sizeof(struct tcphdr));
+
+  ps->saddr = packet.ip.saddr;
+  ps->daddr = packet.ip.daddr;
+  ps->ipproto = packet.ip.protocol;
+  ps->tcp_len = htons(sizeof(struct tcphdr));
+
+  packet.tcp.check =
+      get_checksum(check_buf, sizeof(struct tcphdr) + sizeof(struct pshdr));
+
+  if (sendto(sock, &packet, sizeof(struct tcp_handshake_t), 0,
+             (struct sockaddr *)sa, sizeof(struct sockaddr_ll)) < 0) {
+    printf("[tcp/ERROR]: failed to send ack\n");
+    return -1;
   };
-
-  const struct tcphdr *recv_tcp =
-      (struct tcphdr *)(buf + sizeof(struct ethhdr) + recv_ip->ihl * 4);
-
-  // eth
-  if (ntohs(recv_eth->h_proto) != ETH_P_IP)
-    return -1;
-
-  if (memcmp(recv_eth->h_source, eth->h_dest, 6) != 0)
-    return -1;
-
-  if (memcmp(recv_eth->h_dest, eth->h_source, 6) != 0)
-    return -1;
-
-  // ip
-  if (recv_ip->version != 4)
-    return -1;
-
-  if (recv_ip->protocol != IPPROTO_TCP)
-    return -1;
-
-  if (recv_ip->saddr != ip->daddr)
-    return -1;
-
-  if (recv_ip->daddr != ip->saddr)
-    return -1;
-
-  // tcp
-  if (recv_tcp->source != tcp_conn->dest)
-    return -1;
-
-  if (recv_tcp->dest != tcp_conn->source)
-    return -1;
-
-  if (ntohl(recv_tcp->ack_seq) != (tcp_conn->client_seq + 1))
-    return -1;
-
-  tcp_conn->serv_seq = ntohl(recv_tcp->seq);
-
-  if (!(recv_tcp->syn && recv_tcp->ack) || recv_tcp->fin)
-    return -1;
 
   return 0;
 };

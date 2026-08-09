@@ -38,8 +38,11 @@ int set_handshake(int sock, const struct sockaddr_ll *sa,
 // Parsers
 //
 // Takes poiter to header and pointer
-int _parse_iphdr(const struct iphdr *hdr, uint8_t *opt_out[40]);
 
+int parse_tcpip_fields(const void *hdrs, const size_t size,
+                       const struct ethhdr *eth, const struct iphdr *ip,
+                       TCP_CONN *tcp_conn, void *ip_opts_out[40],
+                       int ip_opts_c_out);
 // int _parse_tcphdr(const struct tcphdr *hdr);
 
 #endif
