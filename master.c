@@ -61,8 +61,8 @@ int main(int argc, char *argv[]) {
 
   memcpy(ep_addr.h_source, h_source, 6);
   memcpy(ep_addr.h_dest, h_dest, 6);
-  inet_pton(AF_INET, source, ep_addr.source);
-  inet_pton(AF_INET, dest, ep_addr.dest);
+  inet_pton(AF_INET, source, &ep_addr.source);
+  inet_pton(AF_INET, dest, &ep_addr.dest);
 
   tcp_conn_t conn;
 
