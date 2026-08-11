@@ -19,8 +19,8 @@ typedef struct {
   // All must be in network endian
   uint8_t h_source[6];
   uint8_t h_dest[6];
-  uint8_t source[4];
-  uint8_t dest[4];
+  uint32_t source;
+  uint32_t dest;
 } endpoint_addr_t;
 
 struct endpoint_hdr {
