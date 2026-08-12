@@ -6,6 +6,10 @@
 #include <netinet/ip.h>
 #include <stdint.h>
 
+#define SYN_ACK 0x12
+#define FIN 0x01
+#define RST 0x04
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -38,6 +42,7 @@ int set_handshake(int sock, const struct sockaddr_ll *sa,
 
 // Parsers
 
-int parse_tcpip(const void *ptr, size_t s, struct endpoint_hdr *ep);
+int parse_tcpip(const void *hdr, size_t s, const struct endpoint_hdr *ep,
+                tcp_conn_t *conn, uint8_t th_flags);
 
 #endif
