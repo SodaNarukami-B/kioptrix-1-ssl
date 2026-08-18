@@ -13,11 +13,11 @@
 #include "./src/tcp/module_ptr.h"
 
 // ----------------------------------------------------------
-const char *source = "192.168.1.11";
-const char *dest = "192.168.1.42";
+const char *source = "192.168.1.3";
+const char *dest = "192.168.1.104";
 
-const uint8_t h_source[6] = {0x08, 0x00, 0x27, 0xc9, 0xb7, 0xe3};
-const uint8_t h_dest[6] = {0xbc, 0x38, 0x98, 0xa0, 0x6c, 0xfc};
+const uint8_t h_source[6] = {0x34, 0x5a, 0x60, 0x23, 0x12, 0xd0};
+const uint8_t h_dest[6] = {0x00, 0x0c, 0x29, 0xc7, 0xf6, 0xd2};
 
 // -----------------------------------------------------------
 
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
   memset(&sa, 0, sizeof(struct sockaddr_ll));
 
   sa.sll_family = AF_PACKET;
-  sa.sll_ifindex = if_nametoindex("enp0s3");
+  sa.sll_ifindex = if_nametoindex("enp3s0");
   sa.sll_protocol = htons(ETH_P_IP);
   sa.sll_halen = 6;
   memcpy(sa.sll_addr, h_dest, 6);
