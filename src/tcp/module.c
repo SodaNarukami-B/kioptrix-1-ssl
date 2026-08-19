@@ -12,20 +12,20 @@
 // ----------------------------------------------------------------------------
 #define MIN_CHECK_TCP_BUF 32 // XXX: Maybe not needed idk
 
-#define IP_HDR_DEFAULT                                                                                                 \
+#define IP_HDR_DEFAULT                                                                                                                     \
   (struct iphdr) { .version = 4, .ihl = 5, .ttl = 64, .protocol = IPPROTO_TCP, }
 
-#define TCP_HDR_DEFAULT                                                                                                \
-  (struct tcphdr){                                                                                                     \
-      .doff = 5,                                                                                                       \
-      .window = 0xffff,                                                                                                \
+#define TCP_HDR_DEFAULT                                                                                                                    \
+  (struct tcphdr){                                                                                                                         \
+      .doff = 5,                                                                                                                           \
+      .window = 0xffff,                                                                                                                    \
   };
 
 // -----------------------------------------------------------------------------
 
 #pragma pack(push, 1)
 
-struct packet_t {
+struct tcp_ip {
   struct ethhdr eth;
   struct iphdr ip;
   struct tcphdr tcp;
@@ -40,12 +40,28 @@ struct tcp_check_struct {
   struct tcphdr tcp;
 };
 
+// -------------------
+
+struct sslhdr {
+  struct tcp_ip tcpip;
+  uint16_t msb : 1;
+  uint16_t rec_len;
+  uint8_t msg_type;
+  uint16_t source_ver;
+  uint16_t chiphers_count;
+  uint16_t session_id_len;
+  uint16_t challenge_len;
+  // Chipher specs (dynamic)
+  // Challenge data (dynamic)
+};
+
 #pragma pack(pop)
 
 // Initalization
 
 uint16_t get_check(const void *ptr, size_t s);
 
+// Tcp
 static int _syn(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
 static int _r_syn_ack(int sock, const struct endpoint_hdr *ep, tcp_conn_t *conn, uint8_t th_flags);
@@ -53,6 +69,10 @@ static int _r_syn_ack(int sock, const struct endpoint_hdr *ep, tcp_conn_t *conn,
 static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
 int set_handshake(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
+
+// Ssl
+
+static int _ssl_c_hello(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
 // ------------------------------------------------------------------------------
 
@@ -94,8 +114,8 @@ int set_handshake(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t 
 };
 
 static int _syn(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn) {
-  struct packet_t pack;
-  memset(&pack, 0, sizeof(struct packet_t));
+  struct tcp_ip pack;
+  memset(&pack, 0, sizeof(struct tcp_ip));
 
   // Defaults
   pack.ip = IP_HDR_DEFAULT;
@@ -129,7 +149,7 @@ static int _syn(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
   pack.tcp.check = get_check(&check_var, sizeof(struct tcp_check_struct));
 
   // Sending
-  int sended = sendto(sock, &pack, sizeof(struct packet_t), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
+  int sended = sendto(sock, &pack, sizeof(struct tcp_ip), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
 
   if (sended <= 0) {
     printf("[tcph/ERROR]: Failed to send syn-packet\n");
@@ -140,7 +160,6 @@ static int _syn(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
 };
 
 static int _r_syn_ack(int sock, const struct endpoint_hdr *ep, tcp_conn_t *conn, uint8_t th_flags) {
-
   uint8_t recv_buf[128] = {0};
 
   /* int count = 0; */
@@ -168,7 +187,7 @@ static int _r_syn_ack(int sock, const struct endpoint_hdr *ep, tcp_conn_t *conn,
 };
 
 static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn) {
-  struct packet_t pack;
+  struct tcp_ip pack;
 
   memcpy(pack.eth.h_source, ep->h_source, 6);
   memcpy(pack.eth.h_dest, ep->h_dest, 6);
@@ -199,7 +218,7 @@ static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
 
   pack.tcp.check = get_check(&check_var, sizeof(struct tcp_check_struct));
 
-  int sended = sendto(sock, &pack, sizeof(struct packet_t), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
+  int sended = sendto(sock, &pack, sizeof(struct tcp_ip), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
 
   if (sended <= 0) {
     printf("[tcph/ERROR]: failed to send ack\n");
@@ -207,6 +226,12 @@ static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
   }
 
   return 0;
+};
+
+static int _ssl_c_hello(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *tcp) {
+  struct sslhdr pack = {0};
+
+  return -1;
 };
 
 uint16_t get_check(const void *ptr, size_t s) {
