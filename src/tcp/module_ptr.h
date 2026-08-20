@@ -37,6 +37,9 @@ struct endpoint_hdr {
 
 // First functions
 
+uint16_t get_check(const void *ptr, size_t s);
+
+// Tcp
 int set_handshake(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
 static int _syn(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
@@ -45,10 +48,10 @@ static int _r_syn_ack(int sock, const struct endpoint_hdr *ep, tcp_conn_t *conn,
 
 static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
-uint16_t get_check(const void *ptr, size_t s);
+// SSl
+int set_ssl_connect(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
 // Parsers
-
 int parse_tcpip(const void *hdr, size_t s, const struct endpoint_hdr *ep, tcp_conn_t *conn, uint8_t th_flags);
 
 #endif

@@ -25,7 +25,7 @@
 
 #pragma pack(push, 1)
 
-struct tcp_ip {
+struct tcpip {
   struct ethhdr eth;
   struct iphdr ip;
   struct tcphdr tcp;
@@ -43,7 +43,6 @@ struct tcp_check_struct {
 // -------------------
 
 struct sslhdr {
-  struct tcp_ip tcpip;
   uint16_t msb : 1;
   uint16_t rec_len;
   uint8_t msg_type;
@@ -53,6 +52,11 @@ struct sslhdr {
   uint16_t challenge_len;
   // Chipher specs (dynamic)
   // Challenge data (dynamic)
+};
+
+struct ssl_packet {
+  struct tcpip tcpip;
+  struct sslhdr ssl;
 };
 
 #pragma pack(pop)
@@ -71,6 +75,8 @@ static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
 int set_handshake(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
 // Ssl
+
+int set_ssl_connect(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
 static int _ssl_c_hello(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn);
 
@@ -113,9 +119,17 @@ int set_handshake(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t 
   return 0;
 };
 
+int set_ssl_connect(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn) {
+  if (_ssl_c_hello(sock, sa, ep, conn) < 0) {
+    return -1;
+  };
+
+  return 0;
+};
+
 static int _syn(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn) {
-  struct tcp_ip pack;
-  memset(&pack, 0, sizeof(struct tcp_ip));
+  struct tcpip pack;
+  memset(&pack, 0, sizeof(struct tcpip));
 
   // Defaults
   pack.ip = IP_HDR_DEFAULT;
@@ -149,7 +163,7 @@ static int _syn(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
   pack.tcp.check = get_check(&check_var, sizeof(struct tcp_check_struct));
 
   // Sending
-  int sended = sendto(sock, &pack, sizeof(struct tcp_ip), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
+  int sended = sendto(sock, &pack, sizeof(struct tcpip), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
 
   if (sended <= 0) {
     printf("[tcph/ERROR]: Failed to send syn-packet\n");
@@ -187,7 +201,7 @@ static int _r_syn_ack(int sock, const struct endpoint_hdr *ep, tcp_conn_t *conn,
 };
 
 static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn) {
-  struct tcp_ip pack;
+  struct tcpip pack;
 
   memcpy(pack.eth.h_source, ep->h_source, 6);
   memcpy(pack.eth.h_dest, ep->h_dest, 6);
@@ -218,7 +232,7 @@ static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
 
   pack.tcp.check = get_check(&check_var, sizeof(struct tcp_check_struct));
 
-  int sended = sendto(sock, &pack, sizeof(struct tcp_ip), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
+  int sended = sendto(sock, &pack, sizeof(struct tcpip), 0, (struct sockaddr *)sa, sizeof(struct sockaddr_ll));
 
   if (sended <= 0) {
     printf("[tcph/ERROR]: failed to send ack\n");
@@ -228,10 +242,71 @@ static int _ack(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *e
   return 0;
 };
 
-static int _ssl_c_hello(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *tcp) {
-  struct sslhdr pack = {0};
+static int _ssl_c_hello(int sock, const struct sockaddr_ll *sa, const endpoint_addr_t *ep, tcp_conn_t *conn) {
 
-  return -1;
+  struct ssl_packet pack = {0};
+
+  // Defaults
+  pack.tcpip.ip = IP_HDR_DEFAULT;
+  pack.tcpip.tcp = TCP_HDR_DEFAULT;
+
+  // Eth
+  memcpy(pack.tcpip.eth.h_dest, ep->h_dest, 6);
+  memcpy(pack.tcpip.eth.h_source, ep->h_source, 6);
+  pack.tcpip.eth.h_proto = htons(ETH_P_IP);
+
+  // Ip
+  pack.tcpip.ip.tot_len = sizeof(struct ssl_packet);
+  pack.tcpip.ip.saddr = ep->source;
+  pack.tcpip.ip.daddr = ep->dest;
+  pack.tcpip.ip.check = get_check(&pack.tcpip.ip, sizeof(struct iphdr));
+
+  // Tcp
+  pack.tcpip.tcp.source = conn->source;
+  pack.tcpip.tcp.dest = conn->dest;
+  pack.tcpip.tcp.seq = htonl(conn->client_seq + 1);
+  pack.tcpip.tcp.ack_seq = htonl(conn->serv_seq);
+  pack.tcpip.tcp.ack = 1;
+
+  struct tcp_check_struct check = {0};
+
+  check.tcp = pack.tcpip.tcp;
+
+  check.source = pack.tcpip.ip.saddr;
+  check.dest = pack.tcpip.ip.daddr;
+  check.protocol = htons(IPPROTO_TCP);
+  check.tcp_len = htons(sizeof(struct tcphdr) + sizeof(struct sslhdr) + 19);
+
+  pack.tcpip.tcp.check = get_check(&check, sizeof(struct tcp_check_struct));
+
+  // Ssl
+  pack.ssl.msb = 1;
+  pack.ssl.rec_len = sizeof(struct sslhdr);
+  pack.ssl.msg_type = 1;
+  pack.ssl.source_ver = htons(0x0200);
+  pack.ssl.chiphers_count = htons(1);
+  pack.ssl.challenge_len = htons(3); // 1 chipher
+  pack.ssl.challenge_len = htons(16);
+
+  uint8_t *buffer = (uint8_t *)calloc(1, sizeof(struct ssl_packet) + 19);
+  memcpy(buffer, &pack, sizeof(struct ssl_packet));
+
+  uint8_t payload[19] = {
+      0x01, 0x00, 0x80,                                                                              // Chipher
+      0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00 // Challenge
+  };
+
+  memcpy(buffer + sizeof(struct ssl_packet), payload, 19);
+
+  int sended = sendto(sock, buffer, sizeof(struct ssl_packet) + 19, 0, (struct sockaddr *)&sa, sizeof(struct sockaddr_ll));
+
+  if (sended < 0) {
+    printf("[ssl/ERROR]: failed to send client hello\n");
+    return -1;
+  };
+
+  printf("[ssl/INFO]: client hello sended\n");
+  return 0;
 };
 
 uint16_t get_check(const void *ptr, size_t s) {

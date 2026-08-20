@@ -80,6 +80,13 @@ int main(int argc, char *argv[]) {
     return -1;
   };
 
+  int ssl_report = set_ssl_connect(sock, &sa, &ep_addr, &conn);
+
+  if (ssl_report < 0) {
+    printf("[master/INFO]: ssl connect failed\n");
+    return -1;
+  };
+
   printf("[master/INFO]: done\n");
 
   return 0;
